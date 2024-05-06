@@ -1,5 +1,6 @@
 This is the code used for the networks project. Most of the code is just in the ProjectWork.ipynb folder.
 The rest is the extracted edgelist and metadata and the final results in the TVTropes folder.
 
-I have also included the modified code from the KONECT dataset extraction project, available here: https://github.com/kunegis/konect-extr
-I primarily modified the contents of this directory to get easier access tot eh metadata: https://github.com/kunegis/konect-extr/tree/master/extr/dbtropes
+The vast majority of this repository is the modified codebase from the KONECT dataset extraction project, available here: https://github.com/kunegis/konect-extr
+I primarily modified the contents of this directory to get easier access to the metadata: https://github.com/kunegis/konect-extr/tree/master/extr/dbtropes
+This project wouldn't be possible without building on Kunegis et al's open-source work.
