@@ -1,0 +1,7 @@
+
+# A transient target without a rule is always an error.
+
+A:  @notexisting {
+    touch A
+}
+

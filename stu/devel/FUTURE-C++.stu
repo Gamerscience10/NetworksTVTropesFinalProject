@@ -1,0 +1,23 @@
+# These are changes that will need newer versions of the C++ standard and/or
+# compilers than what we use now.
+
+#
+# preset.h:  Use to_address(v.end()) instead of v.data() + v.size()  (needs C++20)
+#
+
+#
+# Use standard formatting functions instead of our own.  (C++20)  We can also
+# use custom formatters for the colors, etc.
+#
+
+#
+# Use Assume (C++23).
+#
+
+#
+# Use flat_map where appropriate (C++23).
+#
+
+#
+# Replace unreachable() by std::unreachable() (C++23).
+#

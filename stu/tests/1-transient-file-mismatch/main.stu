@@ -1,0 +1,13 @@
+
+#
+# Check that files and transients really use two distinct namespaces. 
+#
+
+A:  @B
+{
+    cp B A
+}
+
+B {
+    echo bbb >B
+}

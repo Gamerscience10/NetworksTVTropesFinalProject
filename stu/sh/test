@@ -1,0 +1,586 @@
+#! /bin/sh
+#
+# Perform unit tests.  Each unit test is in one subdirectory of the directory
+# tests/.  By default, each test directory contains a file 'main.stu' that
+# performs one unit test.  Additional files may be present to configure how the
+# test is performed.
+#
+# INVOCATION
+#	$0 [TEST]...
+#
+# Without any arguments, perform all tests.  With one or more arguments, perform
+#the given tests.  The given test names are the names of the subdirectories of
+#tests/, and may or may not include the 'tests/' prefix.  The arguments may
+#contain glob patterns.  (No test names contain the glob characters *, ?, etc.)
+#
+# OUTPUT FILES
+#	log/error.log     List of tests that failed, one name per line
+#
+# PARAMETERS
+#	$NDEBUG   Set to non-empty to test the nondebug version; by default
+#	          the debug version is tested
+#	$VARIANT  Other variant of the compiled file; the default is to
+#	          take the file that matches the value of $NDEBUG
+#	$verbose  Set to {0,1,2} for verbose levels; default is 0
+#	$notall   If non-empty, exit on the first error, instead of
+#	          running everything
+#	$emptyok  Set to non-empty to *not* output an error for empty test
+#	          directories; useful after doing "rm" in a version
+#	          control system on one, since that leaves a directory
+#	          containing only (e.g.) ".svn".  Ignores dotfiles.
+#
+# EXIT STATUS
+#	0         All tests succeeded
+#	1         At least one test failed
+#	2         Internal error
+#
+# TEST SPECIFICATION
+#
+# Each subdirectory of tests/ contains one unit test, which follows the
+# following rules:
+#
+# * Each test contains a Stu file 'main.stu' that is to be tested
+# * It must build the file 'A' by default (i.e., that should be the
+#   first target)
+# * All built files must have names that correspond to the pattern given
+#   in sh/rm_tmps, such that they are removed automatically
+#   after the test.  Most generated files' names just consist of a
+#   single uppercase letter (but they don't have to).
+# * There may be other files present used by the test; these are part of
+#   the Stu release, i.e., they are under version control.
+#
+# SPECIFICATION FILES
+#
+# Each of these files can be placed in the individual test directory to
+# enable additional checks or behaviors.  All of these files are optional.
+#
+# TARGET       The name of the target that is built in the test, instead
+#              of the default 'A'.  This does not change the invocation:
+#              Stu is invoked without arguments by default.  It only
+#              changes the check that the file was built, and its
+#              content.   May be an empty file to omit testing for an
+#              existing target.
+# CMD          Additional command arguments passed to Stu.  Content may
+#              use shell quoting and escaping.  For instance, the file
+#              may contain -C ' A ' to pass an argument beginning and ending
+#              in space to Stu.
+# CMDPREFIX    Prefix before command.  Used to set environment variables.
+# PARALLEL     Give the arguments of the -j option for which the test is
+#              to be executed
+# EXITSTATUS   The prescribed exit status; default is zero
+# NOSECOND     If file is present, do not check that second invocation
+#              results in "Targets are up to date" (A second run is only
+#              made if the prescribed exit status is not zero.)
+# NOTTY        Don't do the extra TTY test (e.g., when the -q option is
+#              used and the exit status is expected to be one)
+# NOCOLOR      Don't test for color in stderr (e.g., with the -y option)
+# CONTENT      Prescribe the exact content of the built file
+# INCONTENT    Prescribe strings that must appear in the built file
+# STDOUT       The exact output of Stu
+# STDERR       The exact error output of Stu
+# INSTDOUT     Prescribe strings that must appear in Stu's output
+# INSTDERR     Prescribe strings that must appear in Stu's error output
+# NOTINSTDERR  A text that must not be present in Stu's error output
+# TTYSTDOUTERR The output and error output (interleaved) when in TTY mode
+# EXEC         Can be an alternative test script; it can do anything and
+#              should return a sensible exit status (i.e., 0 on success,
+#              1 on test failed, 2 on internal error).  It also otherwise
+#              behaves like sh/test, e.g., output '***' only on error.
+#
+# For the files beginning with 'IN', each line contains a string that
+# must be present, in any order.
+#
+# NAMES OF TESTS
+#
+# The names of unit tests, i.e., the name of the directories under tests/
+# follow a pattern:
+#
+# * tests/VERSION-ID
+#	These are tests for features introduced in Stu version VERSION.
+#	This was introduced in Stu 2.5, and therefore the assignment of
+#	VERSION numbers for older versions is approximate.  The goal is
+#	to be able to run all tests in asciibetical order so as to test
+#	older features first.  Presumably, these are the features that
+#	should be fixed first when working on Stu.
+# * tests/NAME-ID (deprecated)
+#	These are tests for the feature named NAME, with ID being an
+#	integer.  These are being migrated to the VERSION-ID scheme.
+# * tests/long-NAME
+#	These are tests that take a long time to run.  I.e., at least
+#	one second, due to sleep being used.  We try to avoid this as
+#	much as possible, but sometimes sleeping is the only way to test
+#	something.
+#
+# NOTES
+#
+# * Some tests that use EXEC need to sleep, in order to make sure that
+#   timestamps e.g. of a created file is older than Stu invocation.
+#   Usually, these scripts use "sleep 2", i.e., sleep for two seconds to
+#   make sure that there is a difference in timestamps of at least one
+#   second on systems where file modification times have a precision of
+#   only one second.  An alternative is to use sh/touch_old.
+# * Tests output '***' only in case of error.  This is convenient for
+#   grepping while the tests are running.
+#
+# TODO
+#
+# * For each test, interrupt the test after a specified timeout, to
+#   avoid that the whole testing procedure hangs when a single test
+#   hangs.
+#
+
+# Note:  we can't use "set -e" here (which is a good general practice in
+# shell scripts), because otherwise we can't use $? to check the exit
+# code of Stu.
+
+output_next()
+{
+	echo >&7 '~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~'
+	echo >&7 cd "$file"
+	if [ "$count_failed" = 0 ] ; then
+		count_failed_text=0
+	else
+		count_failed_text="[41;30m$count_failed[m"
+	fi
+	if [ "$verbose" = 0 ] ; then
+		printf '[2KTesting [%s] (%s/%s/%s) %s\r' \
+		       "$VARIANT" \
+		       "[42;30m$count_succeed[m" \
+		       "[43;30m$((count_total - count_succeed - count_failed))[m" \
+		       "$count_failed_text" \
+		       "$file"
+	fi
+}
+
+output_end()
+{
+	echo >&7 '~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~'
+}
+
+output_success()
+{
+	extra=
+	[ "$coverage" ] && extra=" subset($coverage)"
+	echo "[32mTesting [$VARIANT$extra] Success (runtime $runtime)[m"
+}
+
+test_fail()
+{
+	echo >&2 "$0: ($file) *** $1"
+	error=1
+}
+
+test_fail_fatal()
+{
+	echo >&2 "$0: ($file) *** $1"
+	echo "$file" >&6
+	[ "$notall" ] && {
+		echo >&2 "[31m$0: ($file) *** Test '$file' failed [notall][m"
+		exit 1
+	}
+	ret=1
+	count_failed=$(( count_failed + 1 ))
+	cd ..
+}
+
+sort_tests()
+{
+	ls -1U | sed -e '
+s,^\(.*\)$,\1 \1,
+s,^\([a-z].*\)$,9999-\1,
+s,^\([0-9]\)\([-.]..*\)$,000\1\2,
+s,^\([0-9][0-9]\)\([-.]..*\)$,00\1\2,
+s,^\([0-9][0-9][0-9]\)\([-.]..*\)$,0\1\2,
+s,^\([0-9][0-9][0-9][0-9]\)\(-.*\)$,\1.0000\2,
+s,^\([0-9][0-9][0-9][0-9]\)\.\([0-9]\)\([-.]..*\)$,\1.000\2\3,
+s,^\([0-9][0-9][0-9][0-9]\)\.\([0-9][0-9]\)\([-.]..*\)$,\1.00\2\3,
+s,^\([0-9][0-9][0-9][0-9]\)\.\([0-9][0-9][0-9]\)\([-.]..*\)$,\1.0\2\3,
+s,^\([0-9][0-9][0-9][0-9]\.[0-9][0-9][0-9][0-9]\)\(-.*\)$,\1.0000\2,
+s,^\([0-9][0-9][0-9][0-9]\.[0-9][0-9][0-9][0-9]\)\.\([0-9]\)\([-.]..*\)$,\1.000\2\3,
+s,^\([0-9][0-9][0-9][0-9]\.[0-9][0-9][0-9][0-9]\)\.\([0-9][0-9]\)\([-.]..*\)$,\1.00\2\3,
+s,^\([0-9][0-9][0-9][0-9]\.[0-9][0-9][0-9][0-9]\)\.\([0-9][0-9][0-9]\)\([-.]..*\)$,\1.0\2\3,
+	' | sort | sed -e 's,^[^ ][^ ]* \(..*\)$,\1,'
+}
+
+time_begin=$(sh/now)
+ret=0
+count_succeed=0
+count_failed=0
+
+mkdir -p log
+exec 6>log/error.log
+
+verbose=${verbose:-0}
+printf '%s\n' "$verbose" | grep -q -E '^[012]$' || {
+	echo >&2 "$0: *** Invalid verbosity level '$verbose'"
+	exit 2
+}
+[ "$verbose" -ge 1 ] && exec 7>&1 || exec 7>/dev/null
+
+rm -f bin/stu.test || exit 2
+if [ "$VARIANT" ] ; then
+	ln -s stu."$VARIANT" bin/stu.test || exit 2
+else
+	if [ "$NDEBUG" ] ; then
+		VARIANT=ndebug
+		ln -s stu bin/stu.test || exit 2
+	else
+		VARIANT=debug
+		ln -s stu.debug bin/stu.test || exit 2
+	fi
+fi
+
+unset STU_OPTIONS
+
+cd tests
+
+if [ "$1" ] ; then
+	tests="$@"
+	coverage=$(echo $(echo $tests | tr ' ' '\n' | wc -l))
+else
+	# Note:  At some point there might be too many tests, but we don't
+	# want to use ls -1 | { ... } because that would make it impossible
+	# to do "error=1", as setting the variable $error in a subshell
+	# would have no effect.
+	tests=$(sort_tests)
+	coverage=
+fi
+
+count_total=$(echo $(echo $tests | sed 's, ,\
+,g' | wc -l))
+
+# In the next line, '$tests' expands with glob replacement
+for file in $tests
+do
+	file=$(echo "$file" | sed -e 's,^tests/,,')
+	error=0
+
+	if [ ! -d "$file" ]; then
+		test_fail_fatal "'$file' is not a directory"
+		continue
+	fi
+
+	# There are no files in the test directory (ignoring dotfiles)
+	if [ "$(echo $(ls -1 "$file" | wc -l))" = 0 ] ; then
+		if [ "$emptyok" != 1 ] ; then
+			test_fail_fatal "Directory $file/ does not contain any files"
+			continue
+		fi
+	fi
+
+	output_next
+	cd "$file"
+
+	../../sh/rm_tmps || exit 2
+
+	# Check that all all-uppercase files are of one of the allowed files
+	allowed=",EXITSTATUS,PARALLEL,INSTDOUT,INSTDERR,NOTINSTDERR,STDERR,TTYSTDOUTERR,CMD,CMDPREFIX,TARGET,INCONTENT,CONTENT,EXEC,STDOUT,NOSECOND,NOTTY,NOCOLOR,"
+	for otherfile in $(ls -1 | sed -e '/^[A-Z]*$/!d')
+	do
+		if expr "$allowed" : ".*,$otherfile,.*" >/dev/null ; then continue ; fi
+		test_fail_fatal "Invalid file '$otherfile' in test directory"
+		continue
+	done
+
+	CMD=
+	if [ -r CMD ]; then
+		CMD=$(sed -e '/^[[:space:]]*$/d' <CMD)
+	fi
+	CMDPREFIX=
+	if [ -r CMDPREFIX ]; then
+		CMDPREFIX=$(sed -e '/^[[:space:]]*$/d' <CMDPREFIX)
+	fi
+
+	# The following will save:  list.def.out and list.def.err
+
+	if [ -r EXEC ]; then
+		if [ -r EXITSTATUS -o -r PARALLEL -o -r INSTDOUT -o -r INSTDERR \
+			-o -r STDERR -o -r NOTINSTDERR -o -r CMD -o -r CMDPREFIX \
+			-o -r TARGET -o -r INCONTENT -o -r CONTENT \
+			-o -r STDOUT -o -r NOSECOND -o -r NOTTY -o -r TTYSTDOUTERR \
+			-o -r NOCOLOR ]; then
+			test_fail_fatal "EXEC does not allow any other file"
+			continue
+		fi
+
+		echo >&7 ./EXEC
+		./EXEC 1>&7
+		if [ "$?" != 0 ]; then
+			test_fail "EXEC failed"
+		fi
+	else
+		# Execute command
+		echo >&7 $CMDPREFIX ../../bin/stu.test "$CMD"
+		eval $CMDPREFIX ../../bin/stu.test $CMD \>list.def.out 2\>list.def.err
+		exitstatus_actual=$?
+
+		if [ "$verbose" -ge 2 ] ; then
+			echo stdout:
+			echo _______
+			cat list.def.out
+			echo _______
+			echo stderr:
+			echo _______
+			cat list.def.err
+			echo _______
+		fi
+
+		# Exit status
+		exitstatus_correct=0
+		if [ -r EXITSTATUS ]; then
+			[ 1 = "$(echo $(grep -E '[^[:space:]]' EXITSTATUS | wc -l))" ] || {
+				test_fail_fatal "Expected EXITSTATUS to contain a single non-empty line"
+				continue
+			}
+			grep -v -E '^(\s*|\s*[0-9]+\s*)$' EXITSTATUS && {
+				test_fail_fatal "Expected EXITSTATUS to contain a number"
+				continue
+			}
+			exitstatus_correct=$(sed -e '/^[[:space:]]*$/d;s/[[:space:]]\{1,\}//g' <EXITSTATUS)
+			if [ "$exitstatus_correct" = 0 ]; then
+				test_fail_fatal "Content of EXITSTATUS should not be zero"
+				continue
+			fi
+		fi
+		if [ "$exitstatus_actual" != "$exitstatus_correct" ]; then
+			test_fail "Test '$file' should have returned $exitstatus_correct, but returned $exitstatus_actual"
+			echo >&2 list.def.out:
+			echo >&2 ______________
+			cat >&2 list.def.out
+			echo >&2 ______________
+			echo >&2 list.def.err:
+			echo >&2 ______________
+			cat >&2 list.def.err
+			echo >&2 ______________
+		else
+			echo >&7 "EXITSTATUS...$exitstatus_correct correct"
+		fi
+
+		# Target was built or not generate in case of error
+		if [ "$exitstatus_correct" = 0 ]; then
+			target=A
+			if [ -r TARGET ]; then
+				# Remove empty lines but do not alter non-empty lines
+				target=$(sed -e '/^[[:space:]]*$/d' <TARGET)
+			fi
+			if [ -n "$target" ] ; then
+				if [ ! -r "$target" ]; then  # The main target must have been built
+					test_fail "Target '$target' was not built"
+				else
+					# Check that INCONTENT is found in the built file
+					if [ -r INCONTENT ]; then
+						if grep -q -F -e "$(cat INCONTENT)" "$target" ; then
+							echo >&7 "INCONTENT...correct"
+						else
+							test_fail "'$(cat INCONTENT)' must appear in generated file"
+							echo >&2 "$target:"
+							echo >&2 ____
+							cat "$target"
+							echo >&2 ____
+						fi
+					fi
+
+					# Check exact content of the target file
+					if [ -r CONTENT ] ; then
+						if cmp -s -- "$target" CONTENT ; then
+							echo >&7 "CONTENT...correct"
+						else
+							test_fail "CONTENT invalid"
+							diff >&2 -- "$target" CONTENT
+						fi
+					fi
+				fi
+			else
+				if [ -r INCONTENT ] || [ -r CONTENT ] ; then
+					test_fail_fatal "CONTENT and INCONTENT must not appear in conjunction with an empty TARGET"
+					continue
+				fi
+			fi
+		else
+			# Make sure the file "A" was not generated
+			if [ -r A ]; then
+				test_fail "File 'A' was generated although the script failed"
+			fi
+		fi
+
+		# Check that standard output is correct
+		if [ -r STDOUT ] ; then
+			if cmp -s list.def.out STDOUT ; then
+				echo >&7 "STDOUT...correct"
+			else
+				test_fail "Output does not match 'STDOUT'"
+				diff >&2 list.def.out STDOUT
+			fi
+		fi
+
+		# Check that INSTDOUT is found in the output
+		if [ -r INSTDOUT ]; then
+			if  grep <list.def.out -qF -- "$(cat INSTDOUT)" ; then
+				echo >&7 "INSTDOUT...correct"
+			else
+				test_fail "'$(cat INSTDOUT)' was not found in stdout"
+				echo >&2 ____ stdout:
+				cat  >&2 list.def.out
+				echo >&2 ____
+			fi
+		fi
+
+		# Check that at least one line of error message is generated
+		if [ "$exitstatus_correct" != 0 ] && [ \! -r STDERR ]; then
+			if ! [ -s list.def.err ] ; then
+				test_fail "Nothing written to stderr although exit status is >0"
+			fi
+		fi
+
+		# Check that INSTDERR is found in the error output
+		if [ -r INSTDERR ]; then
+			for lineno in $(../../sh/seq $(awk '{x++} END{ print x; }' <INSTDERR)) ; do
+				line=$(<INSTDERR sed -e "$lineno"'!d')
+				if grep <list.def.err -qF -e "$line" ; then
+					echo >&7 "INSTDERR...correct"
+				else
+					test_fail "'$line' was not found in stderr"
+				fi
+			done
+		fi
+
+		# Check that STDERR matches the error output exactly
+		if [ -r STDERR ]; then
+			if cmp -s list.def.err STDERR ; then
+				echo >&7 "STDERR...correct"
+			else
+				test_fail "Error output does not match 'STDERR'"
+				diff >&2 list.def.err STDERR
+			fi
+		fi
+
+		# Check that NOTINSTDERR is not found in the error output
+		if [ -r NOTINSTDERR ]; then
+			if grep -q -F -e "$(cat NOTINSTDERR)" list.def.err ; then
+				test_fail "'$(cat NOTINSTDERR)' was found in error output, but should not be there"
+			else
+				echo >&7 "NOTINSTDERR...correct"
+			fi
+		fi
+
+		# TTYSTDOUTERR
+		if { [ -r TTYSTDOUTERR ] || [ -r EXITSTATUS ]; } && ! [ -r NOTTY ]; then
+			../../sh/rm_tmps || exit 1
+			echo >&7 $CMDPREFIX ../../bin/stu.test "$CMD" '[TTY]'
+			eval $CMDPREFIX ../../sh/tty ../../bin/stu.test $CMD \>list.def.out
+			exitstatus_actual=$?
+
+			# Exit code
+			if [ "$exitstatus_actual" != "$exitstatus_correct" ]; then
+				test_fail "Test '$file' should have returned $exitstatus_correct, but returned $exitstatus_actual [TTY]"
+			else
+				echo >&7 "EXITSTATUS:TTY...$exitstatus_correct correct"
+			fi
+
+			# correct output
+			if [ -r TTYSTDOUTERR ]; then
+				if cmp -s list.def.out TTYSTDOUTERR ; then
+					echo >&7 "TTYSTDOUTERR...correct"
+				else
+					test_fail "TTY error output does not match 'TTYSTDOUTERR'"
+					diff >&2 list.def.out TTYSTDOUTERR
+				fi
+			fi
+
+			if [ -r EXITSTATUS ] && ! [ -r NOCOLOR ] ; then
+				if ! grep -qE -e '' list.def.out ; then
+					test_fail "Expected ESC in TTY output because EXITSTATUS exists"
+					echo >&2 output:
+					echo >&2 _________
+					cat >&2 list.def.out
+					echo >&2 _________
+				else
+					echo >&7 "TTY:COLOR...correct"
+				fi
+			fi
+
+			if grep -qE -e '[[](32|1|35|31)m[^]*$' list.def.out ; then
+				test_fail "Expected closing escape sequence after opening escape sequence in stdout"
+				echo >&2 output:
+				echo >&2 _________
+				cat >&2 list.def.out
+				echo >&2 _________
+			else
+				echo >&7 "TTY:BALANCED...correct"
+			fi
+		fi
+
+		# Second invocation does nothing
+		if [ "$exitstatus_correct" = 0 ] && [ ! -e NOSECOND ]; then
+			echo >&7 $CMDPREFIX ../../bin/stu.test "$CMD"
+			eval $CMDPREFIX ../../bin/stu.test $CMD \>list.def.out 2\>list.def.err
+			grep -qF 'Targets are up to date' list.def.out
+			if [ "$?" = 0 ] ; then
+				echo >&7 "Second invocation...correct"
+			else
+				test_fail "Second invocation did no result in 'Targets are up to date'"
+				echo >&2 STDOUT:
+				echo >&2 _____
+				cat >&2 list.def.out
+				echo >&2 _____
+			fi
+		fi
+
+		# Run in parallel
+		if [ -r PARALLEL ]; then
+			ks=$(sed -e '/^[[:space:]]*$/d' <PARALLEL)
+			for k in $ks; do
+				../../sh/rm_tmps || exit 2
+				echo >&7 $CMDPREFIX ../../bin/stu.test "$CMD" -j "$k"
+				eval $CMDPREFIX ../../bin/stu.test $CMD -j $k \>list.def.out 2\>list.def.err
+				if [ $? != 0 ]
+				then
+					test_fail "Parallel stu failed for '$file' with k = $k"
+				else
+					echo >&7 "PARALLEL...correct"
+				fi
+			done
+		fi
+	fi
+
+	../../sh/rm_tmps || exit 2
+	if [ "$error" != 0 ] ; then
+		test_fail_fatal
+		continue
+	fi
+	cd ..
+	count_succeed=$(( count_succeed + 1 ))
+done
+
+output_end
+cd ..
+
+if [ "$ret" != 0 ] ; then
+	if [ "$count_failed" = 0 ] ; then
+		count_failed_text=0
+	else
+		count_failed_text="[41;30m$count_failed[m"
+	fi
+	if [ "$verbose" = 0 ] ; then
+		printf '[2KTesting done [%s] (%s/%s/%s)\n' \
+		       "$VARIANT" \
+		       "[42;30m$count_succeed[m" \
+		       "[43;30m$((count_total - count_succeed - count_failed))[m" \
+		       "$count_failed_text"
+	fi
+	echo >&2 Failed tests:
+	cat  >&2 log/error.log
+	success_rate=$(awk 'BEGIN{printf "%.2f\n", 100*('"$count_total"'-'"$count_failed"')/'"$count_total"'}')
+	echo >&2 "[31m$0: *** ${success_rate}% success rate.  $count_failed test(s) failed (out of $count_total).[m"
+	exit 1
+fi
+
+time_end=$(sh/now)
+time_diff=$(( time_end - time_begin ))
+runtime=$(printf '%u:%02u\n' "$(expr $time_diff / 60)" "$(expr $time_diff % 60)")
+if [ -z "$1" ] && [ "$VARIANT" = ndebug ] ; then
+	echo >>tests.runtime \
+	     "$(date +%Y-%m-%dT%H:%M:%S) $(printf %s "$(cat VERSION)") $runtime"
+fi
+output_success
+exit 0

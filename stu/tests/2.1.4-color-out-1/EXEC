@@ -1,0 +1,21 @@
+#! /bin/sh
+
+rm -f ? || exit 2
+
+../../bin/stu.test -F 'A=B;B={Hello}' || {
+	echo >&2 "*** (a)"
+	exit 1
+}
+
+../../sh/tty ../../bin/stu.test -F 'A=B;B={Hello}' >list.all || {
+	echo >&2 "*** (b)"
+	exit 1
+}
+
+if ! cmp -s list.all stdall ; then
+	echo >&2 "*** (c)"
+	diff >&2 list.all stdall
+	exit 1
+fi
+
+exit 0

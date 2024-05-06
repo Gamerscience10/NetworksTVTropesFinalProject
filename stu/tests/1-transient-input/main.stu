@@ -1,0 +1,8 @@
+
+# Error:  can't use a transient target as input. 
+
+A:  <@B   { touch A }
+@B {}
+
+
+

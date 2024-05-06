@@ -1,0 +1,211 @@
+# This file lists features that we decided not to implement yet.
+# Many of these ideas are actually good, in particular the "normal"
+# category, and we may revive them in the future.  When in doubt, we
+# prefer to not support a feature, as adding a feature in the future can
+# always be done without breaking compatibility, whereas removing one is
+# always backward-incompatible.
+
+#
+# -m bfs (breadth-first order) and -m target (pseudorandom by target
+# name, i.e., same pseudorandom order for each target, as long as its
+# dependencies are the same).
+#
+
+#
+# A 'why' option that shows why things are built.  Will look similar to
+# error backtraces, only containing explanations.  In essence, output a line
+# everytime one of the 'need_build' variables is updated.  Also, we need
+# to do something smart with timestamps.
+#
+
+# * 'abc' does not exist
+# * 'abc' is older than its dependency 'xyz'
+# * ...
+
+#
+# Have an extended safety mode, in which Stu checks that none of the
+# dependencies themselves where touched by a command.  How deep should
+# this go?  Should it also check dependency included dynamically?
+#
+
+#
+# Have a signal to stop Stu, but without interrupting currently running
+# jobs.  I.e., let all currently running jobs finish, and then quit
+# (with appropriate exit status).
+#
+
+#
+# Fingerprinting instead of timestamps is a feature that is implemented
+# by quite a few Make replacements.  This could also be combined with
+# preprocessors which ignore whitespace, etc.  Can also be used for the
+# commands embedded in Stu scripts, but then again we don't want to
+# rebuild everything just because a command changed.  Another downside
+# is that it needs Stu to go through every file in full, making Stu's
+# runtime be linear in the file size.  At the moment, the runtime of Stu
+# is independent of file size, but of course the command to generate a
+# file is always linear in the file size.  As many features in this
+# file, this opens a enormous can of worms.  Another way to implement it
+# is to compute a fingerprint when before executing the command, and
+# then again after the command succeeds, and when the result is
+# identical, then reset the timestamp of the file back to its old
+# value.  (This could be a script for stu-utils/.)
+#
+
+#
+# Have a logfile.  Similar to debug mode, but into a file.
+#
+
+#
+# Let Stu itself be multithreaded.  Very complex to implement, and has
+# only very little benefit since Stu already starts many processes.
+# Would only make sense in scenarios with thousands of processes, which
+# would only make sense on machines with thousands of cores.  But still
+# very sensible and maybe necessary one day, in principle.
+#
+
+#
+# A Stu server.  The current setup of Stu (and also Make) means that
+# when nothing is to be done, Stu still has to walk the complete
+# dependency tree and stat() every file.  For large projects, this may
+# become very slow.  Instead, have a Stu daemon which uses inotify or
+# similar to notice changes.  There are many practical issues with that,
+# so that would be a huge change.  Would almost likely mean the server
+# itself would do the building, and the client would only communicate
+# with the server.  This also means the server would need to be
+# multi-threaded.  This could also be used to build a Stu GUI (either
+# local or via HTTP) that allows one to control a running Stu server.
+#
+# May actually be trivial to implement once we have proper job
+# control.  But not for now.
+#
+
+#
+# The ability to declare additional command interpreters.  Note:  we may
+# use another character than the backslash.
+#
+# A common theme among Make replacements is to hardcode specific,
+# high-level, programming languages.  This makes certain applications
+# very nice and elegant, namely those that use only features found in
+# these languages.  The idea for Stu is to allow to use any programming
+# language in commands, with a syntax that makes it easy to add new
+# command interpreters.  What we don't want to have are hardcoded
+# programming languages.
+#
+# There are many details to think about for this, and in general this
+# type of feature pushes people to want to hardcode their favorite
+# programming language in Stu, which we don't want.
+#
+# Here's a random example using Julia, assuming that "everything is a
+# matrix".
+#
+
+A.data:  B.data C.data
+\julia{
+	% This command will be executed by the Julia wrapper, and
+	% read/write the three matrices from the corresponding files
+	% automatically.
+	A = B * C;
+}
+
+\julia:  julia-command {
+	# This will be executed whenever A.data is built, and the three
+	# variables used below will be filled by Stu with the dependencies,
+	# the target and the command, which are worked on by the script
+	# ./julia-command to invoke Julia accordingly.
+	./julia-command "$STU_DEPENDENCIES" "$STU_TARGET" "$STU_COMMAND"
+}
+
+# A shell script that converts command to correct Julia scripts.  E.g.,
+# it will load B.data and C.data as the variables B and C, and will save
+# the generated variable A into A.data.
+julia-command;
+
+# Interpreters can be chained
+\julia-or-octave:  \julia;
+
+# This may get problematic with finding the end of a command when
+# programming languages use unusual quoting mechanisms and ways of
+# pairing parenthesis-like characters.
+
+# An alternative is to use '#!', as in the following example:
+A.data:  B.data C.data julia-wrapper
+{#! julia-wrapper
+	A = B * C
+}
+
+# Alternative syntax use a flag:
+
+A: B -c julia
+{
+	# Executed by ./julia
+	A = B^2;
+}
+
+#
+# Alternative dependencies.  Would not be used often, and where it would
+# be needed, it can be implemented using dynamic dependency.  On the
+# other hand, the '|' operator is free...
+#
+
+A:  B | C { ... }
+A:  (B C) | (D E) { ... }
+
+#
+# An option of Stu that generates a shell script from a Stu script that
+# executes the content.  This can be done to any degree of fidelity to
+# the Stu specification, i.e., always build everything, or actually
+# check timestamps.
+#
+
+#
+# libstu:  have the functionality available as a library for C, or for
+# any other programming language.  I would rather have a Stu server and
+# any programming language can then communicate with the Stu server.
+#
+
+#
+# Input and output to transients as a way to implement pipe-like
+# constructs.
+#
+
+>@data.filtered:  <data
+{
+	sed -e '...'
+}
+
+plot.eps:  <@data.filtered
+{
+	... -o plot.eps
+}
+
+# We could also have Stu use pipes using current syntax, in order to
+# execute two "connected" rules.
+A:  <B { ./command-A --output A ; }
+>B:    { ./command-B ; }
+# Both commands may be executed in parallel by Stu, using pipes and
+# tee-like behaviour
+
+#
+# Allow a dynamic dependency to provide a command.  Bad because we don't want to
+# generate Stu source.
+#
+
+A: [B];
+
+B = {
+	{ touch ... ; }
+}
+
+#
+# An %include that takes arguments.
+#
+
+# File A
+%include B(x, y, z)
+
+# File B
+X= list.$(x).$(y).$(z) {...} # Arguments are available as environment variables.
+
+# The more stuish alternative would be
+%include B
+X= [B-dep.x.y.z] {}

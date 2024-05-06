@@ -1,0 +1,7 @@
+
+#
+# A transient that only prints out something. 
+#
+
+@hello { : HELLO }
+

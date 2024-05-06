@@ -1,0 +1,7 @@
+#
+# The transient target does nothing, but outputs something and creates 'X'. 
+#
+
+A: [[B]] { cp X A }
+B = {@B}
+@B { echo correct >X ; echo Hello ; }

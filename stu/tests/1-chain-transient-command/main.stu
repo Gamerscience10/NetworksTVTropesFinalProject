@@ -1,0 +1,10 @@
+
+#
+# A transient target with command down a chain of transients.
+#
+
+@A:  @B;
+
+@B:  @C;
+
+@C { : CORRECT }
